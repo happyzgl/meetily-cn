@@ -105,7 +105,13 @@ fn resolve_final_language_action(
         Some(name) if name != "English" => FinalLanguageAction::Translate(name),
         _ => match detected_transcript_language.and_then(language_name_from_code) {
             Some("English") => FinalLanguageAction::ReturnEnglish,
-            _ => FinalLanguageAction::NormalizeEnglish,
+            // 简体中文版改动（对上游的一处刻意偏离，2026-09-22）：
+            // 未显式指定摘要语言（界面选 Auto）时，跟随转写文本的主导语言输出，
+            // 与界面文案 "Uses dominant transcript language" 保持一致。
+            // 上游此处为 `_ => NormalizeEnglish`，会把中文会议的纪要归一为英文，
+            // 导致"中文会议出英文纪要"。改成 Translate 后，中文会议直接出中文纪要。
+            Some(name) => FinalLanguageAction::Translate(name),
+            None => FinalLanguageAction::NormalizeEnglish,
         },
     }
 }

@@ -1,26 +1,26 @@
 {
-  "name": "Standard Meeting Notes",
-  "description": "A standard template for general meetings, focusing on key outcomes and actions.",
+  "name": "标准会议纪要",
+  "description": "适用于一般会议的标准模板，聚焦关键结论与行动项。",
   "sections": [
     {
-      "title": "Summary",
-      "instruction": "Provide a brief, one-paragraph executive summary of the entire meeting.",
+      "title": "摘要",
+      "instruction": "用一段话给出整场会议的简要概述。",
       "format": "paragraph"
     },
     {
-      "title": "Key Decisions",
-      "instruction": "List the most important decisions made during the meeting.",
+      "title": "关键决策",
+      "instruction": "列出会议中作出的最重要决策。",
       "format": "list"
     },
     {
-      "title": "Action Items",
-      "instruction": "List all assigned tasks with their owners and due date. Always add reference transcript segment and timestamp in the table.",
+      "title": "行动项",
+      "instruction": "列出所有已分配的任务及其负责人与截止日期。务必在表格中附上对应的原文片段与时间戳。",
       "format": "list",
-      "item_format": "| **Owner** | Task | Due | Reference Transcript Segment | Segment Time stamp |\n| --- | --- | --- | --- | --- |"
+      "item_format": "| **负责人** | 任务 | 截止日期 | 原文片段 | 时间戳 |\n| --- | --- | --- | --- | --- |"
     },
     {
-      "title": "Discussion Highlights",
-      "instruction": "Summarize the main topics of discussion, key arguments, and important insights.",
+      "title": "讨论要点",
+      "instruction": "概述讨论的主要议题、关键论证与重要洞见。",
       "format": "paragraph"
     }
   ]

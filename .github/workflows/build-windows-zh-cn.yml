@@ -1,0 +1,154 @@
+name: "Build Windows zh-CN (Unsigned)"
+
+# 简体中文版云端构建。本机不装 Rust / MSVC / CMake，编译交给 GitHub 免费 runner。
+#
+# 与上游 build-windows.yml 的差异（有意为之）：
+#   1. 关闭代码签名（上游用 DigiCert KeyLocker，密钥是私有 secret，fork 里没有）
+#   2. 关闭更新包签名（上游用 TAURI_SIGNING_PRIVATE_KEY，同样是私有 secret）
+#      —— 对应 tauri.conf.json 的 bundle.createUpdaterArtifacts = false
+#      —— 以及已移除的 bundle.windows.signCommand
+#   3. 默认只出 CPU 版，不装 Vulkan SDK；需要 GPU 加速时在手动触发时填 features=vulkan
+#   4. 不传 MEETILY_RSA_PUBLIC_KEY / SUPABASE_URL / SUPABASE_ANON_KEY
+#      （这三个只在工作流里出现，Rust 源码中没有任何读取点，属历史遗留）
+#
+# 保留的关键点：GGML_NATIVE OFF + -C target-cpu=x86-64-v2。
+# 不这么做的话 ggml 会按 runner 的 CPU 特化编译（可能带 AVX512），产物在用户机器上会
+# 因非法指令直接崩溃。捆绑前由 .github/verify-portable-ggml.cjs 校验。
+
+on:
+  workflow_dispatch:
+    inputs:
+      rust-features:
+        description: "Rust 特性（留空 = CPU 版；填 vulkan = Vulkan GPU 加速）"
+        required: false
+        default: ""
+        type: string
+  push:
+    branches:
+      - zh-cn
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Windows x64 未签名安装包
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve pnpm store path
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Configure portable native build
+        shell: pwsh
+        run: |
+          $cmakeHook = (Join-Path $env:GITHUB_WORKSPACE ".github/force-portable-ggml.cmake").Replace('\', '/')
+          "CMAKE_PROJECT_INCLUDE=$cmakeHook" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $configPath = (Join-Path $env:RUNNER_TEMP "tauri.portable.conf.json").Replace('\', '/')
+          @{
+            build = @{
+              beforeBundleCommand = @{
+                script = "node .github/verify-portable-ggml.cjs target/x86_64-pc-windows-msvc/release"
+                cwd = $env:GITHUB_WORKSPACE
+              }
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
+          "TAURI_PORTABLE_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "CMAKE_PROJECT_INCLUDE=$cmakeHook"
+          Write-Host "TAURI_PORTABLE_CONFIG=$configPath"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          prefix-key: windows-portable-zhcn-v1
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend (类型检查 + 静态导出)
+        working-directory: frontend
+        run: pnpm build
+
+      - name: Build llama-helper sidecar (CPU only)
+        shell: pwsh
+        run: |
+          cargo build --release -p llama-helper
+          if ($LASTEXITCODE -ne 0) { Write-Error "llama-helper 编译失败"; exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
+          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
+          Get-ChildItem "frontend/src-tauri/binaries/"
+
+      - name: Build Tauri app (unsigned)
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          $tauriArgs = @("build", "--target", "x86_64-pc-windows-msvc", "--config", $env:TAURI_PORTABLE_CONFIG)
+          $features = "${{ inputs.rust-features }}".Trim()
+          if ($features) { $tauriArgs += @("--features", $features) }
+          Write-Host ">>> pnpm exec tauri $($tauriArgs -join ' ')"
+          pnpm exec tauri @tauriArgs
+          if ($LASTEXITCODE -ne 0) { Write-Error "Tauri 构建失败"; exit $LASTEXITCODE }
+
+      - name: List bundle output
+        shell: bash
+        run: |
+          find target/x86_64-pc-windows-msvc/release/bundle -type f \( -name "*.exe" -o -name "*.msi" \) -exec ls -lh {} \; || true
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetily-zh-cn-windows-x64-unsigned
+          path: |
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Build summary
+        shell: bash
+        run: |
+          {
+            echo "## Meetily 简体中文版 (Windows x64, 未签名)"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | 0.4.1 (zh-CN) |"
+            echo "| Rust 特性 | ${{ inputs.rust-features }} (空 = CPU 版) |"
+            echo "| 代码签名 | 已关闭 |"
+            echo "| 更新包签名 | 已关闭 |"
+          } >> $GITHUB_STEP_SUMMARY
