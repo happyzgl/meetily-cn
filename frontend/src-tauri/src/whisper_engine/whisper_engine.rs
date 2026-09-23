@@ -596,10 +596,12 @@ impl WhisperEngine {
         params.set_max_len(200);
         params.set_single_segment(false);
 
-        // Set thread count based on hardware (if supported by whisper.cpp)
-        if let Some(_max_threads) = adaptive_config.max_threads {
-            // Note: whisper.cpp may or may not expose thread control through params
-            // Removed debug log to reduce I/O overhead in transcription hot path
+        // FIX: actually apply the thread count computed by hardware_detector.
+        // whisper-rs defaults to min(4, hardware_concurrency()), so an 8-core/16-thread CPU
+        // was decoding on 4 threads only. AdaptiveWhisperConfig already caps the value
+        // (max 8) to keep thermal headroom, so pass it through as-is.
+        if let Some(max_threads) = adaptive_config.max_threads {
+            params.set_n_threads(max_threads as i32);
         }
 
         let duration_seconds = audio_data.len() as f64 / 16000.0;
@@ -697,6 +699,12 @@ impl WhisperEngine {
         params.set_no_speech_thold(0.55);
         params.set_max_len(200);
         params.set_single_segment(false);
+
+        // FIX: same as transcribe_audio_with_confidence - apply the detected thread count.
+        // This function had no thread handling at all before.
+        if let Some(max_threads) = adaptive_config.max_threads {
+            params.set_n_threads(max_threads as i32);
+        }
 
         let mut state = ctx.create_state()?;
         state.full(params, &audio_data)?;
